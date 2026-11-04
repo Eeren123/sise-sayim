@@ -1,5 +1,4 @@
 from pathlib import Path
-import time
 import cv2
 import numpy as np
 import streamlit as st
@@ -15,6 +14,13 @@ from predict import (
     load_trained_model,
 )
 
+try:
+    import av
+    from streamlit_webrtc import WebRtcMode, webrtc_streamer
+    HAS_WEBRTC = True
+except ImportError:
+    HAS_WEBRTC = False
+
 st.set_page_config(
     page_title="Şişe Sayım Sistemi",
     page_icon="🍾",
@@ -26,14 +32,12 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Genel Konteyner ve Mobil Uyum */
     .block-container {
         padding-top: 1.2rem !important;
         padding-bottom: 2rem !important;
         max-width: 1100px !important;
     }
 
-    /* Başlık Kartı */
     .app-header {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
         color: #f8fafc;
@@ -56,7 +60,6 @@ st.markdown(
         margin: 0.35rem 0 0 0 !important;
     }
 
-    /* Büyük Şişe Sayısı Sonuç Kartı */
     .count-card {
         background: linear-gradient(135deg, #065f46 0%, #047857 100%);
         color: #ffffff;
@@ -82,7 +85,6 @@ st.markdown(
         color: #ffffff;
     }
 
-    /* Dokunmatik Dostu Butonlar */
     .stButton > button, .stDownloadButton > button {
         width: 100% !important;
         min-height: 3.1rem !important;
@@ -91,14 +93,12 @@ st.markdown(
         font-size: 1rem !important;
     }
 
-    /* Sekme (Tab) Başlıkları */
     button[data-baseweb="tab"] {
         font-size: 0.98rem !important;
         font-weight: 700 !important;
         padding: 0.65rem 1rem !important;
     }
 
-    /* Mobil Ekranlar İçin Özel Kurallar (<= 768px) */
     @media (max-width: 768px) {
         .block-container {
             padding-left: 0.75rem !important;
@@ -122,7 +122,6 @@ st.markdown(
         .count-card .count-value {
             font-size: 2.15rem;
         }
-        /* Mobilde Radio Seçeneklerini Alt Alta ve Dokunmatik Kart Gibi Göster */
         div[role="radiogroup"] {
             gap: 0.45rem !important;
         }
@@ -210,7 +209,7 @@ def main():
         """
         <div class="app-header">
             <h1>🍾 Otomatik Şişe Sayım Sistemi (CNN)</h1>
-            <p>Kameradan fotoğraf çekin veya görsel yükleyin — sistem şişeleri çerçeve içine alıp anında sayar.</p>
+            <p>Cihazınızın kamerasını açın veya fotoğraf yükleyin — sistem şişeleri çerçeve içine alıp anında sayar.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -234,21 +233,85 @@ def main():
         test_mode = st.radio(
             "Kullanım Yöntemi Seçin:",
             [
-                "📱 Telefon Kamerası / Fotoğraf Yükle (Mobil İçin Önerilen)",
-                "📸 Tarayıcı Kamerası ile Anlık Çekim",
+                "📸 Kamerayı Aç & Çek (Telefon ve Bilgisayar Kamerası)",
+                "🎥 Canlı Video Akışı (Gerçek Zamanlı Kamera - WebRTC)",
+                "📱 Yüksek Çözünürlüklü Fotoğraf Çek / Galeriden Yükle",
                 "🖼️ Örnek Koli Görselleri ile Test",
-                "🎥 Bilgisayar Kamerası (Canlı Video Akışı)",
             ],
             horizontal=False,
         )
 
         # ------------------------------------------------------------------
-        # 1) TELEFON KAMERASI VEYA GALERİDEN FOTOĞRAF YÜKLE (MOBİL UYUMLU)
+        # 1) TARAYICI KAMERASI İLE CANLI ÖNİZLEME & TEK TUŞLA SAYIM (%100 UYUMLU)
         # ------------------------------------------------------------------
-        if test_mode == "📱 Telefon Kamerası / Fotoğraf Yükle (Mobil İçin Önerilen)":
+        if test_mode == "📸 Kamerayı Aç & Çek (Telefon ve Bilgisayar Kamerası)":
             st.info(
-                "💡 **Telefondan kullanırken:** Aşağıdaki butona dokunduğunuzda telefonunuzun **Arka Kamerasını (Fotoğraf Çek)** "
-                "veya **Galerisini** seçerek kutudaki şişeleri yüksek çözünürlükte çekip anında saydırabilirsiniz."
+                "📷 Tarayıcınız kamera izni istediğinde **'İzin Ver (Allow)'** seçeneğine dokunun. "
+                "Kamerayı şişelere tutup **'Take Photo'** butonuna bastığınızda anında sayım yapılır."
+            )
+            cam_photo = st.camera_input("Cihaz Kamerası")
+            if cam_photo is not None:
+                file_bytes = np.asarray(bytearray(cam_photo.read()), dtype=np.uint8)
+                frame_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                if frame_bgr is not None:
+                    process_and_display(model, frame_bgr, show_input=False)
+
+        # ------------------------------------------------------------------
+        # 2) CANLI VİDEO AKIŞI (WEBRTC - GİRİLEN CİHAZIN KAMERASINI CANLI İŞLER)
+        # ------------------------------------------------------------------
+        elif test_mode == "🎥 Canlı Video Akışı (Gerçek Zamanlı Kamera - WebRTC)":
+            if not HAS_WEBRTC:
+                st.warning("Canlı WebRTC modülü yükleniyor. Lütfen '📸 Kamerayı Aç & Çek' seçeneğini kullanın.")
+            else:
+                st.info(
+                    "🎥 Aşağıdaki **'START'** butonuna bastığınızda **giriş yaptığınız telefonun veya bilgisayarın kamerası** "
+                    "canlı olarak açılır ve video üzerinde gerçek zamanlı şişe sayımı yapılır."
+                )
+                cam_facing = st.radio(
+                    "Kamera Yönü (Telefondan Giriyorsanız):",
+                    ["Arka Kamera (Kutu Sayımı İçin)", "Ön Kamera / Bilgisayar Kamerası"],
+                    horizontal=True,
+                )
+                facing_mode = "environment" if "Arka" in cam_facing else "user"
+
+                def video_frame_callback(frame: "av.VideoFrame") -> "av.VideoFrame":
+                    img_bgr = frame.to_ndarray(format="bgr24")
+                    vis_bgr, _, _ = count_bottles(
+                        model,
+                        img_bgr,
+                        conf_thresh=FIXED_CONF_THRESH,
+                        iou_thresh=FIXED_IOU_THRESH,
+                        draw_numbers=False,
+                        draw_boxes=True,
+                        draw_centers=False,
+                    )
+                    return av.VideoFrame.from_ndarray(vis_bgr, format="bgr24")
+
+                webrtc_streamer(
+                    key=f"bottle-counter-{facing_mode}",
+                    mode=WebRtcMode.SENDRECV,
+                    rtc_configuration={
+                        "iceServers": [
+                            {"urls": ["stun:stun.l.google.com:19302"]},
+                            {"urls": ["stun:stun1.l.google.com:19302"]},
+                            {"urls": ["stun:stun2.l.google.com:19302"]},
+                        ]
+                    },
+                    media_stream_constraints={
+                        "video": {"facingMode": facing_mode},
+                        "audio": False,
+                    },
+                    video_frame_callback=video_frame_callback,
+                    async_processing=True,
+                )
+
+        # ------------------------------------------------------------------
+        # 3) TELEFON ARKA KAMERASI (TAM ÇÖZÜNÜRLÜK) VEYA GALERİDEN YÜKLE
+        # ------------------------------------------------------------------
+        elif test_mode == "📱 Yüksek Çözünürlüklü Fotoğraf Çek / Galeriden Yükle":
+            st.info(
+                "💡 Telefondan aşağıdaki kutuya dokunduğunuzda **'Fotoğraf Çek (Kamera)'** veya **'Galeri'** "
+                "seçeneği açılır. Çok sayıda küçük şişe içeren kolilerde en net sonucu verir."
             )
             uploaded_file = st.file_uploader(
                 "📷 Fotoğraf Çekmek veya Seçmek İçin Dokunun",
@@ -261,19 +324,7 @@ def main():
                     process_and_display(model, img_bgr, show_input=False)
 
         # ------------------------------------------------------------------
-        # 2) TARAYICI İÇİ CANLI KAMERA VİZÖRÜ (st.camera_input)
-        # ------------------------------------------------------------------
-        elif test_mode == "📸 Tarayıcı Kamerası ile Anlık Çekim":
-            st.caption("Kamerayı kutunun üzerine tutun ve **'Take Photo'** butonuna dokunun.")
-            cam_photo = st.camera_input("Canlı Kamera Vizörü")
-            if cam_photo is not None:
-                file_bytes = np.asarray(bytearray(cam_photo.read()), dtype=np.uint8)
-                frame_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-                if frame_bgr is not None:
-                    process_and_display(model, frame_bgr, show_input=False)
-
-        # ------------------------------------------------------------------
-        # 3) ÖRNEK KOLİ GÖRSELLERİ İLE TEST (ORİJİNAL & ŞEFFAF)
+        # 4) ÖRNEK KOLİ GÖRSELLERİ İLE TEST (ORİJİNAL & ŞEFFAF)
         # ------------------------------------------------------------------
         elif test_mode == "🖼️ Örnek Koli Görselleri ile Test":
             col_s1, col_s2 = st.columns([1, 1])
@@ -301,70 +352,6 @@ def main():
             if img_bgr is not None:
                 rotated_input = rotate_bgr_image(img_bgr, test_angle)
                 process_and_display(model, rotated_input, show_input=True)
-
-        # ------------------------------------------------------------------
-        # 4) BİLGİSAYAR KAMERASI (LOCAL OPENCV CANLI AKIŞ)
-        # ------------------------------------------------------------------
-        elif test_mode == "🎥 Bilgisayar Kamerası (Canlı Video Akışı)":
-            st.caption("Not: Bu mod uygulamanın çalıştığı bilgisayara bağlı yerel USB/Webcam kamerasını kullanır.")
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                start_cam = st.button("▶️ Canlı Kamerayı Başlat", type="primary", use_container_width=True)
-            with col_b2:
-                stop_cam = st.button("⏹️ Kamerayı Durdur", use_container_width=True)
-
-            if "cam_running" not in st.session_state:
-                st.session_state.cam_running = False
-            if start_cam:
-                st.session_state.cam_running = True
-            if stop_cam:
-                st.session_state.cam_running = False
-
-            count_placeholder = st.empty()
-            frame_placeholder = st.empty()
-
-            if st.session_state.cam_running:
-                cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-                if not cap.isOpened():
-                    cap = cv2.VideoCapture(0)
-
-                if not cap.isOpened():
-                    st.error("Yerel kamera açılamadı! Telefondan bağlanıyorsanız lütfen yukarıdaki **'📱 Telefon Kamerası'** veya **'📸 Tarayıcı Kamerası'** seçeneğini kullanın.")
-                    st.session_state.cam_running = False
-                else:
-                    try:
-                        while st.session_state.cam_running:
-                            ret, frame = cap.read()
-                            if not ret or frame is None:
-                                break
-
-                            vis_frame, _, stats = count_bottles(
-                                model,
-                                frame,
-                                conf_thresh=FIXED_CONF_THRESH,
-                                iou_thresh=FIXED_IOU_THRESH,
-                                draw_numbers=False,
-                                draw_boxes=True,
-                                draw_centers=False,
-                            )
-
-                            count_placeholder.markdown(
-                                f"""
-                                <div class="count-card">
-                                    <div class="count-label">🍾 Canlı Toplam Şişe Sayısı</div>
-                                    <div class="count-value">{stats['count']} Adet</div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-                            frame_placeholder.image(
-                                cv2.cvtColor(vis_frame, cv2.COLOR_BGR2RGB),
-                                channels="RGB",
-                                use_container_width=True,
-                            )
-                            time.sleep(0.02)
-                    finally:
-                        cap.release()
 
     with tab_verify:
         st.subheader("Görselde Gerçekten 83 Şişe Olduğunun Kanıtı")
