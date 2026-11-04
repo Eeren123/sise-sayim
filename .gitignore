@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+dataset/
+runs/
+yolov8n.pt
+.env
