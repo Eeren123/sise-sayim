@@ -141,9 +141,9 @@ def render_count_card(count: int):
 
 def render_live_onnx_camera():
     """
-    Tarayıcı içinde doğrudan telefonun/bilgisayarın kamerasına bağlanan (getUserMedia),
-    canlı görüntü üzerinde şişeleri anlık çerçeveleyip sayan ve '📸 Fotoğraf Çek' butonuyla
-    görüntüyü dondurup kaydedebilen bileşen.
+    Hem canlı kamera akışı (getUserMedia) hem de izin gerektirmeyen doğrudan
+    telefon kamerası / fotoğraf yakalama (input capture='environment') destekli
+    tarayıcı içi CNN sayım bileşeni.
     """
     html_code = f"""
     <!DOCTYPE html>
@@ -193,7 +193,7 @@ def render_live_onnx_camera():
                 padding: 13px 12px;
                 border-radius: 12px;
                 border: none;
-                font-size: 0.96rem;
+                font-size: 0.95rem;
                 font-weight: 700;
                 cursor: pointer;
                 transition: transform 0.1s, opacity 0.2s;
@@ -201,8 +201,17 @@ def render_live_onnx_camera():
                 align-items: center;
                 justify-content: center;
                 gap: 6px;
+                text-align: center;
             }}
             .btn:active {{ transform: scale(0.98); }}
+            .btn-native {{
+                background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+                color: #ffffff;
+                grid-column: span 2;
+                font-size: 1.05rem;
+                border: 2px solid #6ee7b7;
+                padding: 15px 12px;
+            }}
             .btn-start {{ background: #2563eb; color: #ffffff; }}
             .btn-switch {{ background: #334155; color: #f8fafc; }}
             .btn-snap {{ background: #059669; color: #ffffff; grid-column: span 2; display: none; font-size: 1.05rem; border: 2px solid #34d399; }}
@@ -210,16 +219,17 @@ def render_live_onnx_camera():
             .status-bar {{
                 font-size: 0.85rem;
                 text-align: center;
-                padding: 8px 12px;
+                padding: 9px 12px;
                 border-radius: 10px;
                 background: #1e293b;
                 color: #38bdf8;
                 border: 1px solid rgba(56, 189, 248, 0.25);
+                line-height: 1.4;
             }}
             .cam-stage {{
                 position: relative;
                 width: 100%;
-                min-height: 320px;
+                min-height: 340px;
                 background: #0f172a;
                 border-radius: 16px;
                 overflow: hidden;
@@ -228,10 +238,10 @@ def render_live_onnx_camera():
                 align-items: center;
                 justify-content: center;
             }}
-            #camVideo {{
+            #camVideo, #photoCanvas {{
                 width: 100%;
                 height: auto;
-                display: block;
+                display: none;
             }}
             #overlayCanvas {{
                 position: absolute;
@@ -242,33 +252,39 @@ def render_live_onnx_camera():
                 pointer-events: none;
             }}
             .placeholder-msg {{
-                position: absolute;
                 text-align: center;
-                padding: 20px;
+                padding: 24px;
                 color: #94a3b8;
-                font-size: 0.95rem;
+                font-size: 0.93rem;
+                line-height: 1.5;
             }}
         </style>
     </head>
     <body>
         <div class="live-wrapper">
             <div class="live-counter">
-                <div class="lbl">🍾 Kamerada Tespit Edilen Şişe Sayısı</div>
+                <div class="lbl">🍾 Tespit Edilen Toplam Şişe Sayısı</div>
                 <div class="val" id="bottleCount">0 Adet</div>
             </div>
 
+            <!-- İzin hatası vermeyen doğrudan telefon/kamera tetikleyici -->
+            <input type="file" id="nativeCamInput" accept="image/*" capture="environment" style="display:none" onchange="handleNativePhoto(event)">
+
             <div class="controls">
+                <button class="btn btn-native" onclick="document.getElementById('nativeCamInput').click()">
+                    📸 Telefon Kamerasıyla Fotoğraf Çek / Seç (İzin Hatası Vermez)
+                </button>
                 <button class="btn btn-start" id="btnStart" onclick="startCamera('environment')">
-                    📷 Arka Kamerayı Aç
+                    🎥 Canlı Kamerayı Aç (Arka)
                 </button>
                 <button class="btn btn-switch" id="btnFront" onclick="startCamera('user')">
-                    💻 Ön / PC Kamerasını Aç
+                    💻 Canlı Kamera (Ön / PC)
                 </button>
                 <button class="btn btn-snap" id="btnSnap" onclick="toggleFreeze()">
-                    📸 Fotoğraf Çek / Görüntüyü Sabitle
+                    📸 Görüntüyü Sabitle (Fotoğraf Çek)
                 </button>
                 <button class="btn btn-stop" id="btnStop" onclick="stopCamera()">
-                    ⏹️ Kamerayı Kapat
+                    ⏹️ Canlı Kamerayı Kapat
                 </button>
             </div>
 
@@ -278,15 +294,29 @@ def render_live_onnx_camera():
 
             <div class="cam-stage">
                 <div class="placeholder-msg" id="placeholderMsg">
-                    Kamerayı açmak için yukarıdaki <b>"📷 Arka Kamerayı Aç"</b> veya <b>"💻 Ön / PC Kamerasını Aç"</b> butonuna dokunun.<br>
-                    Kameranın gördüğü alandaki şişeler canlı olarak çerçevelenip sayılacaktır.
+                    <b>Telefondan en hızlı kullanım:</b> En üstteki yeşil <b>"📸 Telefon Kamerasıyla Fotoğraf Çek"</b> butonuna dokunun.<br><br>
+                    <b>Canlı video üzerinde sayım için:</b> Mavi <b>"🎥 Canlı Kamerayı Aç"</b> butonuna dokunun ve tarayıcı izin isterse <b>"İzin Ver (Allow)"</b> seçin.
                 </div>
                 <video id="camVideo" autoplay playsinline muted></video>
+                <canvas id="photoCanvas"></canvas>
                 <canvas id="overlayCanvas"></canvas>
             </div>
         </div>
 
         <script>
+            // Streamlit iframe'ine kamera izni yetkisi ekle
+            try {{
+                if (window.parent && window.parent.document) {{
+                    const iframes = window.parent.document.querySelectorAll("iframe");
+                    iframes.forEach(f => {{
+                        const cur = f.getAttribute("allow") || "";
+                        if (!cur.includes("camera")) {{
+                            f.setAttribute("allow", (cur ? cur + "; " : "") + "camera *; microphone *");
+                        }}
+                    }});
+                }}
+            }} catch (e) {{}}
+
             const MODEL_URLS = [
                 "https://raw.githubusercontent.com/Eeren123/sise-sayim/main/models/bottle_yolov8_best.onnx",
                 "https://cdn.jsdelivr.net/gh/Eeren123/sise-sayim@main/models/bottle_yolov8_best.onnx"
@@ -301,6 +331,8 @@ def render_live_onnx_camera():
             let isFrozen = false;
 
             const video = document.getElementById("camVideo");
+            const photoCanvas = document.getElementById("photoCanvas");
+            const photoCtx = photoCanvas.getContext("2d");
             const overlay = document.getElementById("overlayCanvas");
             const overlayCtx = overlay.getContext("2d");
             const countEl = document.getElementById("bottleCount");
@@ -318,7 +350,7 @@ def render_live_onnx_camera():
                 try {{
                     ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
                     ort.env.wasm.numThreads = 1;
-                    statusEl.innerText = "⏳ Eğitilmiş CNN modeli indiriliyor (ilk açılışta ~3 sn sürer)...";
+                    statusEl.innerText = "⏳ Eğitilmiş CNN modeli yükleniyor (~2 sn)...";
                     let loaded = false;
                     for (const url of MODEL_URLS) {{
                         try {{
@@ -330,7 +362,7 @@ def render_live_onnx_camera():
                         }}
                     }}
                     if (loaded) {{
-                        statusEl.innerText = "✅ CNN Modeli Hazır! Yukarıdaki mavi butonla kamerayı açabilirsiniz.";
+                        statusEl.innerText = "✅ CNN Modeli Hazır! Yukarıdaki yeşil veya mavi butonla hemen başlayabilirsiniz.";
                         statusEl.style.color = "#34d399";
                     }} else {{
                         statusEl.innerText = "⚠️ Model yüklenemedi. Lütfen sayfayı yenileyin.";
@@ -339,71 +371,6 @@ def render_live_onnx_camera():
                 }} catch (err) {{
                     statusEl.innerText = "⚠️ Model başlatma hatası: " + err.message;
                 }}
-            }}
-
-            async function startCamera(facingMode) {{
-                stopCamera();
-                try {{
-                    statusEl.innerText = "📷 Kamera açılıyor, izin istenirse 'İzin Ver'e dokunun...";
-                    const constraints = {{
-                        audio: false,
-                        video: {{
-                            facingMode: {{ ideal: facingMode }},
-                            width: {{ ideal: 1280 }},
-                            height: {{ ideal: 720 }}
-                        }}
-                    }};
-                    videoStream = await navigator.mediaDevices.getUserMedia(constraints);
-                    video.srcObject = videoStream;
-                    await video.play();
-
-                    placeholderEl.style.display = "none";
-                    btnSnap.style.display = "flex";
-                    btnSnap.innerText = "📸 Fotoğraf Çek / Görüntüyü Sabitle";
-                    btnStop.style.display = "flex";
-                    isRunning = true;
-                    isFrozen = false;
-                    statusEl.innerText = "🟢 Canlı Kamera Aktif — Şişeler anlık olarak sayılıyor";
-                    statusEl.style.color = "#34d399";
-
-                    requestAnimationFrame(processLoop);
-                }} catch (err) {{
-                    statusEl.innerText = "❌ Kamera açılamadı: Lütfen tarayıcıdan kamera izni verin (" + err.message + ")";
-                    statusEl.style.color = "#f87171";
-                }}
-            }}
-
-            function toggleFreeze() {{
-                if (!videoStream) return;
-                if (!isFrozen) {{
-                    isFrozen = true;
-                    video.pause();
-                    btnSnap.innerText = "▶️ Canlı Sayıma Devam Et";
-                    btnSnap.style.background = "#2563eb";
-                    statusEl.innerText = "📸 Fotoğraf çekildi ve sabitlendi! Sonuç yukarıda gösteriliyor.";
-                }} else {{
-                    isFrozen = false;
-                    video.play();
-                    btnSnap.innerText = "📸 Fotoğraf Çek / Görüntüyü Sabitle";
-                    btnSnap.style.background = "#059669";
-                    statusEl.innerText = "🟢 Canlı Kamera Aktif — Şişeler anlık olarak sayılıyor";
-                    requestAnimationFrame(processLoop);
-                }}
-            }}
-
-            function stopCamera() {{
-                isRunning = false;
-                isFrozen = false;
-                if (videoStream) {{
-                    videoStream.getTracks().forEach(t => t.stop());
-                    videoStream = null;
-                }}
-                video.srcObject = null;
-                overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-                btnSnap.style.display = "none";
-                btnStop.style.display = "none";
-                placeholderEl.style.display = "block";
-                countEl.innerText = "0 Adet";
             }}
 
             function computeIoU(a, b) {{
@@ -435,6 +402,167 @@ def render_live_onnx_camera():
                 return selected;
             }}
 
+            async function detectOnSource(sourceEl, vw, vh) {{
+                if (!session) return [];
+                const scale = Math.min(INPUT_SIZE / vw, INPUT_SIZE / vh);
+                const nw = Math.round(vw * scale);
+                const nh = Math.round(vh * scale);
+                const padX = Math.floor((INPUT_SIZE - nw) / 2);
+                const padY = Math.floor((INPUT_SIZE - nh) / 2);
+
+                offCtx.fillStyle = "rgb(114, 114, 114)";
+                offCtx.fillRect(0, 0, INPUT_SIZE, INPUT_SIZE);
+                offCtx.drawImage(sourceEl, padX, padY, nw, nh);
+
+                const imgData = offCtx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE).data;
+                const numPixels = INPUT_SIZE * INPUT_SIZE;
+                const floatData = new Float32Array(3 * numPixels);
+
+                for (let i = 0; i < numPixels; i++) {{
+                    floatData[i] = imgData[i * 4] / 255.0;
+                    floatData[numPixels + i] = imgData[i * 4 + 1] / 255.0;
+                    floatData[2 * numPixels + i] = imgData[i * 4 + 2] / 255.0;
+                }}
+
+                const inputTensor = new ort.Tensor("float32", floatData, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+                const feeds = {{ [session.inputNames[0]]: inputTensor }};
+                const results = await session.run(feeds);
+                const out = results[session.outputNames[0]].data;
+                const numAnchors = 8400;
+
+                const rawBoxes = [];
+                for (let i = 0; i < numAnchors; i++) {{
+                    const score = out[4 * numAnchors + i];
+                    if (score >= CONF_THRESH) {{
+                        const cx = out[0 * numAnchors + i];
+                        const cy = out[1 * numAnchors + i];
+                        const w = out[2 * numAnchors + i];
+                        const h = out[3 * numAnchors + i];
+
+                        const x1 = Math.max(0, (cx - w / 2 - padX) / scale);
+                        const y1 = Math.max(0, (cy - h / 2 - padY) / scale);
+                        const x2 = Math.min(vw, (cx + w / 2 - padX) / scale);
+                        const y2 = Math.min(vh, (cy + h / 2 - padY) / scale);
+
+                        if (x2 - x1 > 6 && y2 - y1 > 6) {{
+                            rawBoxes.push({{ x1, y1, x2, y2, score }});
+                        }}
+                    }}
+                }}
+                return nms(rawBoxes, IOU_THRESH);
+            }}
+
+            async function handleNativePhoto(event) {{
+                const file = event.target.files[0];
+                if (!file) return;
+                stopCamera();
+                statusEl.innerText = "⏳ Fotoğraf işleniyor, şişeler sayılıyor...";
+                statusEl.style.color = "#38bdf8";
+
+                const img = new Image();
+                img.onload = async () => {{
+                    const vw = img.width;
+                    const vh = img.height;
+                    photoCanvas.width = vw;
+                    photoCanvas.height = vh;
+                    overlay.width = vw;
+                    overlay.height = vh;
+
+                    placeholderEl.style.display = "none";
+                    video.style.display = "none";
+                    photoCanvas.style.display = "block";
+                    photoCtx.drawImage(img, 0, 0, vw, vh);
+
+                    const finalBoxes = await detectOnSource(img, vw, vh);
+                    countEl.innerText = finalBoxes.length + " Adet";
+
+                    overlayCtx.clearRect(0, 0, vw, vh);
+                    overlayCtx.strokeStyle = "#00e640";
+                    overlayCtx.lineWidth = Math.max(3, Math.round(vw / 220));
+                    for (const b of finalBoxes) {{
+                        overlayCtx.strokeRect(b.x1, b.y1, b.x2 - b.x1, b.y2 - b.y1);
+                    }}
+
+                    statusEl.innerText = "✅ Sayım Tamamlandı: Toplam " + finalBoxes.length + " adet şişe tespit edildi.";
+                    statusEl.style.color = "#34d399";
+                }};
+                img.src = URL.createObjectURL(file);
+            }}
+
+            async function startCamera(facingMode) {{
+                stopCamera();
+                try {{
+                    statusEl.innerText = "📷 Kamera açılıyor... (Adres çubuğunda izin istenirse 'İzin Ver / Allow' seçin)";
+                    statusEl.style.color = "#38bdf8";
+
+                    let constraints = {{
+                        audio: false,
+                        video: {{
+                            facingMode: {{ ideal: facingMode }},
+                            width: {{ ideal: 1280 }},
+                            height: {{ ideal: 720 }}
+                        }}
+                    }};
+                    try {{
+                        videoStream = await navigator.mediaDevices.getUserMedia(constraints);
+                    }} catch (firstErr) {{
+                        // Belirli kamera yönü bulunamazsa varsayılan herhangi bir kamerayı aç
+                        videoStream = await navigator.mediaDevices.getUserMedia({{ video: true, audio: false }});
+                    }}
+
+                    photoCanvas.style.display = "none";
+                    placeholderEl.style.display = "none";
+                    video.style.display = "block";
+                    video.srcObject = videoStream;
+                    await video.play();
+
+                    btnSnap.style.display = "flex";
+                    btnSnap.innerText = "📸 Görüntüyü Sabitle (Fotoğraf Çek)";
+                    btnStop.style.display = "flex";
+                    isRunning = true;
+                    isFrozen = false;
+                    statusEl.innerText = "🟢 Canlı Kamera Aktif — Şişeler anlık olarak sayılıyor";
+                    statusEl.style.color = "#34d399";
+
+                    requestAnimationFrame(processLoop);
+                }} catch (err) {{
+                    statusEl.innerHTML = "⚠️ <b>Tarayıcı canlı kameraya izin vermedi veya cihazda kamera bulunamadı.</b><br>Çözüm: Tarayıcı adres çubuğunun solundaki 🔒/⚙️ simgesinden Kamera iznini <b>'İzin Ver'</b> yapın veya doğrudan üstteki yeşil <b>'📸 Telefon Kamerasıyla Fotoğraf Çek'</b> butonunu kullanın.";
+                    statusEl.style.color = "#fbbf24";
+                }}
+            }}
+
+            function toggleFreeze() {{
+                if (!videoStream) return;
+                if (!isFrozen) {{
+                    isFrozen = true;
+                    video.pause();
+                    btnSnap.innerText = "▶️ Canlı Sayıma Devam Et";
+                    btnSnap.style.background = "#2563eb";
+                    statusEl.innerText = "📸 Görüntü sabitlendi! Tespit edilen şişe sayısı yukarıda gösteriliyor.";
+                }} else {{
+                    isFrozen = false;
+                    video.play();
+                    btnSnap.innerText = "📸 Görüntüyü Sabitle (Fotoğraf Çek)";
+                    btnSnap.style.background = "#059669";
+                    statusEl.innerText = "🟢 Canlı Kamera Aktif — Şişeler anlık olarak sayılıyor";
+                    requestAnimationFrame(processLoop);
+                }}
+            }}
+
+            function stopCamera() {{
+                isRunning = false;
+                isFrozen = false;
+                if (videoStream) {{
+                    videoStream.getTracks().forEach(t => t.stop());
+                    videoStream = null;
+                }}
+                video.srcObject = null;
+                video.style.display = "none";
+                overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+                btnSnap.style.display = "none";
+                btnStop.style.display = "none";
+            }}
+
             async function processLoop() {{
                 if (!isRunning || isFrozen) return;
 
@@ -447,54 +575,8 @@ def render_live_onnx_camera():
                         overlay.height = vh;
                     }}
 
-                    const scale = Math.min(INPUT_SIZE / vw, INPUT_SIZE / vh);
-                    const nw = Math.round(vw * scale);
-                    const nh = Math.round(vh * scale);
-                    const padX = Math.floor((INPUT_SIZE - nw) / 2);
-                    const padY = Math.floor((INPUT_SIZE - nh) / 2);
-
-                    offCtx.fillStyle = "rgb(114, 114, 114)";
-                    offCtx.fillRect(0, 0, INPUT_SIZE, INPUT_SIZE);
-                    offCtx.drawImage(video, padX, padY, nw, nh);
-
-                    const imgData = offCtx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE).data;
-                    const numPixels = INPUT_SIZE * INPUT_SIZE;
-                    const floatData = new Float32Array(3 * numPixels);
-
-                    for (let i = 0; i < numPixels; i++) {{
-                        floatData[i] = imgData[i * 4] / 255.0;
-                        floatData[numPixels + i] = imgData[i * 4 + 1] / 255.0;
-                        floatData[2 * numPixels + i] = imgData[i * 4 + 2] / 255.0;
-                    }}
-
                     try {{
-                        const inputTensor = new ort.Tensor("float32", floatData, [1, 3, INPUT_SIZE, INPUT_SIZE]);
-                        const feeds = {{ [session.inputNames[0]]: inputTensor }};
-                        const results = await session.run(feeds);
-                        const out = results[session.outputNames[0]].data;
-                        const numAnchors = 8400;
-
-                        const rawBoxes = [];
-                        for (let i = 0; i < numAnchors; i++) {{
-                            const score = out[4 * numAnchors + i];
-                            if (score >= CONF_THRESH) {{
-                                const cx = out[0 * numAnchors + i];
-                                const cy = out[1 * numAnchors + i];
-                                const w = out[2 * numAnchors + i];
-                                const h = out[3 * numAnchors + i];
-
-                                const x1 = Math.max(0, (cx - w / 2 - padX) / scale);
-                                const y1 = Math.max(0, (cy - h / 2 - padY) / scale);
-                                const x2 = Math.min(vw, (cx + w / 2 - padX) / scale);
-                                const y2 = Math.min(vh, (cy + h / 2 - padY) / scale);
-
-                                if (x2 - x1 > 6 && y2 - y1 > 6) {{
-                                    rawBoxes.push({{ x1, y1, x2, y2, score }});
-                                }}
-                            }}
-                        }}
-
-                        const finalBoxes = nms(rawBoxes, IOU_THRESH);
+                        const finalBoxes = await detectOnSource(video, vw, vh);
                         countEl.innerText = finalBoxes.length + " Adet";
 
                         overlayCtx.clearRect(0, 0, vw, vh);
@@ -518,7 +600,7 @@ def render_live_onnx_camera():
     </body>
     </html>
     """
-    components.html(html_code, height=720, scrolling=False)
+    components.html(html_code, height=750, scrolling=False)
 
 
 def rotate_bgr_image(img_bgr: np.ndarray, angle_deg: int) -> np.ndarray:
@@ -592,46 +674,15 @@ def main():
         test_mode = st.radio(
             "Test Yöntemi Seçin:",
             [
-                "📷 Canlı Kameraya Bağlan (Anlık Canlı Sayım)",
-                "📸 Fotoğraf Çek / Galeriden Yükle",
+                "📷 Kamera ile Canlı Sayım / Fotoğraf Çek",
                 "🖼️ Örnek Koli Görselleri ile Test",
             ],
             horizontal=True,
         )
 
-        # ------------------------------------------------------------------
-        # 1) CANLI KAMERA VİZÖRÜ (DOĞRUDAN TELEFON/PC KAMERASINA BAĞLANIR VE CANLI SAYAR)
-        # ------------------------------------------------------------------
-        if test_mode == "📷 Canlı Kameraya Bağlan (Anlık Canlı Sayım)":
+        if test_mode == "📷 Kamera ile Canlı Sayım / Fotoğraf Çek":
             render_live_onnx_camera()
 
-        # ------------------------------------------------------------------
-        # 2) KAMERADAN FOTOĞRAF ÇEK (TAKE PHOTO) VEYA DOSYA YÜKLE (UPLOAD)
-        # ------------------------------------------------------------------
-        elif test_mode == "📸 Fotoğraf Çek / Galeriden Yükle":
-            st.markdown("##### 📸 1. Kameradan Doğrudan Fotoğraf Çek")
-            cam_photo = st.camera_input("Kamerayı açıp 'Take Photo' butonuna basarak fotoğraf çekin")
-            if cam_photo is not None:
-                file_bytes = np.asarray(bytearray(cam_photo.read()), dtype=np.uint8)
-                frame_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-                if frame_bgr is not None:
-                    process_and_display(model, frame_bgr, show_input=False)
-
-            st.markdown("---")
-            st.markdown("##### 📁 2. Veya Cihazdan / Galeriden Fotoğraf Yükle")
-            uploaded_file = st.file_uploader(
-                "Telefon galerisinden veya bilgisayardan fotoğraf seçin",
-                type=["jpg", "jpeg", "png", "webp"],
-            )
-            if uploaded_file is not None:
-                file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-                img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-                if img_bgr is not None:
-                    process_and_display(model, img_bgr, show_input=False)
-
-        # ------------------------------------------------------------------
-        # 3) ÖRNEK KOLİ GÖRSELLERİ İLE TEST
-        # ------------------------------------------------------------------
         elif test_mode == "🖼️ Örnek Koli Görselleri ile Test":
             col_s1, col_s2 = st.columns([1, 1])
             with col_s1:
