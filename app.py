@@ -141,9 +141,9 @@ def render_count_card(count: int):
 
 def render_live_onnx_camera():
     """
-    Tarayıcı içinde doğrudan telefonun/bilgisayarın kamerasına bağlanan (getUserMedia)
-    ve eğitilmiş YOLOv8 ONNX modelimizle kamera görüntüsü üzerinde canlı olarak
-    çerçeve çizip şişe sayısını gösteren bileşen (Video oynatıcı yoktur, 0 gecikmeli canlı vizördür).
+    Tarayıcı içinde doğrudan telefonun/bilgisayarın kamerasına bağlanan (getUserMedia),
+    canlı görüntü üzerinde şişeleri anlık çerçeveleyip sayan ve '📸 Fotoğraf Çek' butonuyla
+    görüntüyü dondurup kaydedebilen bileşen.
     """
     html_code = f"""
     <!DOCTYPE html>
@@ -205,6 +205,7 @@ def render_live_onnx_camera():
             .btn:active {{ transform: scale(0.98); }}
             .btn-start {{ background: #2563eb; color: #ffffff; }}
             .btn-switch {{ background: #334155; color: #f8fafc; }}
+            .btn-snap {{ background: #059669; color: #ffffff; grid-column: span 2; display: none; font-size: 1.05rem; border: 2px solid #34d399; }}
             .btn-stop {{ background: #dc2626; color: #ffffff; grid-column: span 2; display: none; }}
             .status-bar {{
                 font-size: 0.85rem;
@@ -252,16 +253,19 @@ def render_live_onnx_camera():
     <body>
         <div class="live-wrapper">
             <div class="live-counter">
-                <div class="lbl">🍾 Canlı Kamerada Tespit Edilen Şişe</div>
+                <div class="lbl">🍾 Kamerada Tespit Edilen Şişe Sayısı</div>
                 <div class="val" id="bottleCount">0 Adet</div>
             </div>
 
             <div class="controls">
                 <button class="btn btn-start" id="btnStart" onclick="startCamera('environment')">
-                    📷 Kameraya Bağlan (Arka)
+                    📷 Arka Kamerayı Aç
                 </button>
                 <button class="btn btn-switch" id="btnFront" onclick="startCamera('user')">
-                    🔄 Ön / PC Kamerası
+                    💻 Ön / PC Kamerasını Aç
+                </button>
+                <button class="btn btn-snap" id="btnSnap" onclick="toggleFreeze()">
+                    📸 Fotoğraf Çek / Görüntüyü Sabitle
                 </button>
                 <button class="btn btn-stop" id="btnStop" onclick="stopCamera()">
                     ⏹️ Kamerayı Kapat
@@ -274,7 +278,7 @@ def render_live_onnx_camera():
 
             <div class="cam-stage">
                 <div class="placeholder-msg" id="placeholderMsg">
-                    Kamerayı açmak için yukarıdaki <b>"📷 Kameraya Bağlan"</b> butonuna dokunun.<br>
+                    Kamerayı açmak için yukarıdaki <b>"📷 Arka Kamerayı Aç"</b> veya <b>"💻 Ön / PC Kamerasını Aç"</b> butonuna dokunun.<br>
                     Kameranın gördüğü alandaki şişeler canlı olarak çerçevelenip sayılacaktır.
                 </div>
                 <video id="camVideo" autoplay playsinline muted></video>
@@ -294,6 +298,7 @@ def render_live_onnx_camera():
             let session = null;
             let videoStream = null;
             let isRunning = false;
+            let isFrozen = false;
 
             const video = document.getElementById("camVideo");
             const overlay = document.getElementById("overlayCanvas");
@@ -302,6 +307,7 @@ def render_live_onnx_camera():
             const statusEl = document.getElementById("statusBar");
             const placeholderEl = document.getElementById("placeholderMsg");
             const btnStop = document.getElementById("btnStop");
+            const btnSnap = document.getElementById("btnSnap");
 
             const offCanvas = document.createElement("canvas");
             offCanvas.width = INPUT_SIZE;
@@ -324,7 +330,7 @@ def render_live_onnx_camera():
                         }}
                     }}
                     if (loaded) {{
-                        statusEl.innerText = "✅ CNN Modeli Hazır! '📷 Kameraya Bağlan' butonuna dokunabilirsiniz.";
+                        statusEl.innerText = "✅ CNN Modeli Hazır! Yukarıdaki mavi butonla kamerayı açabilirsiniz.";
                         statusEl.style.color = "#34d399";
                     }} else {{
                         statusEl.innerText = "⚠️ Model yüklenemedi. Lütfen sayfayı yenileyin.";
@@ -352,8 +358,11 @@ def render_live_onnx_camera():
                     await video.play();
 
                     placeholderEl.style.display = "none";
+                    btnSnap.style.display = "flex";
+                    btnSnap.innerText = "📸 Fotoğraf Çek / Görüntüyü Sabitle";
                     btnStop.style.display = "flex";
                     isRunning = true;
+                    isFrozen = false;
                     statusEl.innerText = "🟢 Canlı Kamera Aktif — Şişeler anlık olarak sayılıyor";
                     statusEl.style.color = "#34d399";
 
@@ -364,14 +373,34 @@ def render_live_onnx_camera():
                 }}
             }}
 
+            function toggleFreeze() {{
+                if (!videoStream) return;
+                if (!isFrozen) {{
+                    isFrozen = true;
+                    video.pause();
+                    btnSnap.innerText = "▶️ Canlı Sayıma Devam Et";
+                    btnSnap.style.background = "#2563eb";
+                    statusEl.innerText = "📸 Fotoğraf çekildi ve sabitlendi! Sonuç yukarıda gösteriliyor.";
+                }} else {{
+                    isFrozen = false;
+                    video.play();
+                    btnSnap.innerText = "📸 Fotoğraf Çek / Görüntüyü Sabitle";
+                    btnSnap.style.background = "#059669";
+                    statusEl.innerText = "🟢 Canlı Kamera Aktif — Şişeler anlık olarak sayılıyor";
+                    requestAnimationFrame(processLoop);
+                }}
+            }}
+
             function stopCamera() {{
                 isRunning = false;
+                isFrozen = false;
                 if (videoStream) {{
                     videoStream.getTracks().forEach(t => t.stop());
                     videoStream = null;
                 }}
                 video.srcObject = null;
                 overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+                btnSnap.style.display = "none";
                 btnStop.style.display = "none";
                 placeholderEl.style.display = "block";
                 countEl.innerText = "0 Adet";
@@ -407,7 +436,7 @@ def render_live_onnx_camera():
             }}
 
             async function processLoop() {{
-                if (!isRunning) return;
+                if (!isRunning || isFrozen) return;
 
                 if (video.readyState >= 2 && session && video.videoWidth > 0) {{
                     const vw = video.videoWidth;
@@ -418,7 +447,6 @@ def render_live_onnx_camera():
                         overlay.height = vh;
                     }}
 
-                    // Letterbox 640x640 hazırlığı
                     const scale = Math.min(INPUT_SIZE / vw, INPUT_SIZE / vh);
                     const nw = Math.round(vw * scale);
                     const nh = Math.round(vh * scale);
@@ -480,7 +508,7 @@ def render_live_onnx_camera():
                     }}
                 }}
 
-                if (isRunning) {{
+                if (isRunning && !isFrozen) {{
                     setTimeout(() => requestAnimationFrame(processLoop), 40);
                 }}
             }}
@@ -490,7 +518,7 @@ def render_live_onnx_camera():
     </body>
     </html>
     """
-    components.html(html_code, height=680, scrolling=False)
+    components.html(html_code, height=720, scrolling=False)
 
 
 def rotate_bgr_image(img_bgr: np.ndarray, angle_deg: int) -> np.ndarray:
@@ -543,7 +571,7 @@ def main():
         """
         <div class="app-header">
             <h1>🍾 Otomatik Şişe Sayım Sistemi (CNN)</h1>
-            <p>Kameraya bağlanarak canlı alanda şişeleri sayın veya fotoğraf üzerinden test edin.</p>
+            <p>Kameraya bağlanarak canlı alanda şişeleri sayın veya fotoğraf çekerek test edin.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -565,7 +593,7 @@ def main():
             "Test Yöntemi Seçin:",
             [
                 "📷 Canlı Kameraya Bağlan (Anlık Canlı Sayım)",
-                "📱 Fotoğraf Çek / Galeriden Yükle",
+                "📸 Fotoğraf Çek / Galeriden Yükle",
                 "🖼️ Örnek Koli Görselleri ile Test",
             ],
             horizontal=True,
@@ -578,11 +606,21 @@ def main():
             render_live_onnx_camera()
 
         # ------------------------------------------------------------------
-        # 2) TELEFONDAN FOTOĞRAF ÇEK VEYA GALERİDEN YÜKLE
+        # 2) KAMERADAN FOTOĞRAF ÇEK (TAKE PHOTO) VEYA DOSYA YÜKLE (UPLOAD)
         # ------------------------------------------------------------------
-        elif test_mode == "📱 Fotoğraf Çek / Galeriden Yükle":
+        elif test_mode == "📸 Fotoğraf Çek / Galeriden Yükle":
+            st.markdown("##### 📸 1. Kameradan Doğrudan Fotoğraf Çek")
+            cam_photo = st.camera_input("Kamerayı açıp 'Take Photo' butonuna basarak fotoğraf çekin")
+            if cam_photo is not None:
+                file_bytes = np.asarray(bytearray(cam_photo.read()), dtype=np.uint8)
+                frame_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                if frame_bgr is not None:
+                    process_and_display(model, frame_bgr, show_input=False)
+
+            st.markdown("---")
+            st.markdown("##### 📁 2. Veya Cihazdan / Galeriden Fotoğraf Yükle")
             uploaded_file = st.file_uploader(
-                "📷 Fotoğraf Çekmek veya Seçmek İçin Dokunun",
+                "Telefon galerisinden veya bilgisayardan fotoğraf seçin",
                 type=["jpg", "jpeg", "png", "webp"],
             )
             if uploaded_file is not None:
